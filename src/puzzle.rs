@@ -1,14 +1,15 @@
+mod line;
+use line::{Cell, Direction, Line};
 use std::cell::RefCell;
-use std::fmt::{Display, write};
 use std::io::prelude::*;
 use std::{fs::File, rc::Rc};
-use yaml_rust::YamlLoader;
+use yaml_rust::{Yaml, YamlLoader};
 
 #[derive(Debug)]
 pub struct Puzzle {
-    dimensions: (usize, usize),
-    rows: Vec<Row>,
-    columns: Vec<Column>,
+    _dimensions: (usize, usize),
+    rows: Vec<Line>,
+    columns: Vec<Line>,
 }
 
 impl Puzzle {
@@ -17,14 +18,24 @@ impl Puzzle {
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
 
-        let yaml = YamlLoader::load_from_str(&contents).unwrap();
-        let puzzle = &yaml[0];
+        let puzzle = match Self::parse_yaml(contents) {
+            Ok(p) => Ok(p),
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+        };
+        puzzle
+    }
 
-        let dimensions = &puzzle["puzzle"]["dimensions"];
-        let dimensions = (
-            dimensions[0].as_i64().unwrap() as u64 as usize,
-            dimensions[1].as_i64().unwrap() as u64 as usize,
-        );
+    fn parse_yaml(contents: String) -> Result<Puzzle, String> {
+        let yaml = match YamlLoader::load_from_str(&contents) {
+            Ok(y) => y,
+            Err(_) => return Err("Failed to Scan File".to_string()),
+        };
+        let puzzle = &yaml[0];
+        let dimensions = match Self::get_dimensions(&puzzle) {
+            Some(dims) => dims,
+            None => return Err("Failed to parse dimensions".to_string()),
+        };
+
         let mut cells: Vec<Vec<Rc<RefCell<Cell>>>> = Vec::with_capacity(dimensions.0);
         for _ in 0..dimensions.0 {
             let mut row: Vec<Rc<RefCell<Cell>>> = Vec::with_capacity(dimensions.1);
@@ -34,22 +45,23 @@ impl Puzzle {
             cells.push(row);
         }
 
-        let column_hints = Self::parse_hints(&puzzle["puzzle"]["columns"]);
-        let mut columns: Vec<Column> = Vec::new();
+        let column_hints = Self::parse_hints(&puzzle["puzzle"]["columns"])?;
+        let mut columns: Vec<Line> = Vec::new();
         for (i, col) in column_hints.iter().enumerate() {
-            let cell_refs: Vec<Rc<RefCell<Cell>>> = cells.iter().map(|r| Rc::clone(&r[i])).collect();
-            columns.push(Column::new(cell_refs, col.to_vec()));
+            let cell_refs: Vec<Rc<RefCell<Cell>>> =
+                cells.iter().map(|r| Rc::clone(&r[i])).collect();
+            columns.push(Line::new(cell_refs, col.to_vec(), Direction::Column));
         }
 
-        let row_hints = Self::parse_hints(&puzzle["puzzle"]["rows"]);
-        let mut rows: Vec<Row> = Vec::new();
+        let row_hints = Self::parse_hints(&puzzle["puzzle"]["rows"])?;
+        let mut rows: Vec<Line> = Vec::new();
         for (i, row) in row_hints.iter().enumerate() {
             let cell_refs: Vec<Rc<RefCell<Cell>>> = cells[i].iter().map(|r| Rc::clone(r)).collect();
-            rows.push(Row::new(cell_refs, row.to_vec()));
+            rows.push(Line::new(cell_refs, row.to_vec(), Direction::Row));
         }
 
         let puzzle = Puzzle {
-            dimensions,
+            _dimensions: dimensions,
             columns,
             rows,
         };
@@ -57,41 +69,56 @@ impl Puzzle {
         Ok(puzzle)
     }
 
-    fn parse_hints(hints: &yaml_rust::Yaml) -> Vec<Vec<usize>> {
-        let hints = hints.as_hash().unwrap().values();
-        let mut lines: Vec<Vec<usize>> = Vec::new();
-        for line in hints {
-            lines.push(
+    fn get_dimensions(puzzle: &Yaml) -> Option<(usize, usize)> {
+        let dimensions = match (
+            &puzzle["puzzle"]["rows"].as_hash(),
+            &puzzle["puzzle"]["columns"].as_hash(),
+        ) {
+            (Some(x), Some(y)) => Some((x.len(), y.len())),
+            _ => None,
+        };
+        dimensions
+    }
+
+    fn parse_hints(hints: &yaml_rust::Yaml) -> Result<Vec<Vec<usize>>, String> {
+        let hints = match hints.as_hash() {
+            Some(h) => h.values(),
+            None => return Err("Failed to parse hints".to_string()),
+        };
+        let lines = hints
+            .into_iter()
+            .map(|line| {
                 line.as_vec()
                     .unwrap()
                     .iter()
                     .map(|x| x.as_i64().unwrap() as u64 as usize)
-                    .collect(),
-            );
-        }
-        lines
+                    .collect()
+            })
+            .collect();
+        Ok(lines)
     }
 
-    pub fn display(&self) -> String{
-		let mut schema = String::new();
+    pub fn display(&self) {
+        let mut schema = String::new();
         let height = self
             .columns
             .iter()
-            .map(|col| col.hint.numbers.len())
+            .map(|col| col.hint().len())
             .max()
             .unwrap();
-        
-		let width = self
+
+        let width = self
             .rows
             .iter()
-            .map(|row| (row.hint.numbers.len() * 2) - 1)
+            .map(|row| (row.hint().len() * 2) - 1)
             .max()
             .unwrap();
 
         for i in 0..height {
             schema.push_str(&format!("{} ", " ".repeat(width)));
             for col in &self.columns {
-                schema.push_str(&match col.hint.numbers.get(i) {
+                let hints: Vec<usize> = col.hint().iter().rev().cloned().collect();
+                schema.push_str(&match hints.get(height - i - 1) {
                     Some(n) => format!("{n} "),
                     None => format!("  "),
                 });
@@ -99,190 +126,56 @@ impl Puzzle {
             schema.push_str(&format!("\n"));
         }
 
-		schema.push_str(&self.display_rows());
+        schema.push_str(&self.display_rows(width));
 
-		println!("{schema}");
-		schema
+        println!("{}[2J {schema}", 27 as char);
     }
 
-	pub fn display_rows(&self) -> String {
-		let width = self
-            .rows
-            .iter()
-            .map(|row| (row.hint.numbers.len() * 2) - 1)
-            .max()
-            .unwrap();
-		
-		let mut schema = String::new();
+    pub fn display_rows(&self, width: usize) -> String {
+        let mut schema = String::new();
 
-		for row in &self.rows {
-
-			schema.push_str(&if (row.hint.numbers.len() * 2) - 1 < width {
-				let diff = width - (row.hint.numbers.len() * 2);
-				format!("{} {}{row}\n", " ".repeat(diff), row.hint)
-			} else {
-				format!("{}{row}\n", row.hint)
-			});
-            
+        for row in &self.rows {
+            schema.push_str(&if (row.hint().len() * 2) - 1 < width {
+                let diff = width - (row.hint().len() * 2);
+                format!("{} {}{row}\n", " ".repeat(diff), row.hint_obj())
+            } else {
+                format!("{}{row}\n", row.hint_obj())
+            });
         }
-		schema
-	}
-
-	pub fn display_grid(&self) -> String {
-		let mut schema = String::new();
-
-		for row in &self.rows {
-			schema.push_str(&format!("{row}\n"));
-        }
-		schema
-	}
-
-	pub fn mark_cell(&self, x: usize, y: usize) {
-		self.rows[y].cells[x].borrow_mut().mark();
-	}
-
-	pub fn block_cell(&self, x: usize, y: usize) {
-		self.rows[y].cells[x].borrow_mut().block();
-	}
-
-	pub fn wipe_cell(&self, x: usize, y: usize) {
-		self.rows[y].cells[x].borrow_mut().wipe();
-	}
-
-	pub fn check(&self) -> bool{
-		self.rows.iter().fold(true, |acc, row| acc && row.check()) &&
-		self.columns.iter().fold(true, |acc, col| acc && col.check())
-	}
-}
-
-#[derive(Debug)]
-struct Row {
-    cells: Vec<Rc<RefCell<Cell>>>,
-    hint: Hint,
-}
-
-impl Row {
-    fn new(cells: Vec<Rc<RefCell<Cell>>>, hint: Vec<usize>) -> Row {
-        let hint = Hint::new(hint);
-        Row { cells, hint }
+        schema
     }
 
-	fn check(&self) -> bool {
-		let mut checks = vec![];
-		let mut full = 0;
-		let mut other = 0;
-		for cell in &self.cells {
-			match cell.borrow().state {
-				State::Full => full+=1,
-				State::Blocked | State::Empty => {
-					other+=1;
-					if full!=0 {checks.push(full);}
-					full = 0;
-				},
-			}
-		}
-		checks == self.hint.numbers
-	}
-}
-
-impl Display for Row {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut cells = String::new();
-        for cell in &self.cells {
-            cells.push_str(&format!("{} ", RefCell::borrow(cell)));
-        }
-        write!(f, "{cells}")
-    }
-}
-
-#[derive(Debug)]
-struct Column {
-    cells: Vec<Rc<RefCell<Cell>>>,
-    hint: Hint,
-}
-
-impl Column {
-    fn new(cells: Vec<Rc<RefCell<Cell>>>, hint: Vec<usize>) -> Column {
-        let hint = Hint::new(hint);
-        Column { cells, hint }
-    }
-
-	fn check(&self) -> bool {
-		let mut checks = vec![];
-		let mut full = 0;
-		let mut other = 0;
-		for cell in &self.cells {
-			match cell.borrow().state {
-				State::Full => full+=1,
-				State::Blocked | State::Empty => {
-					other+=1;
-					if full!=0 {checks.push(full);}
-					full = 0;
-				},
-			}
-		}
-		checks == self.hint.numbers
-	}
-}
-#[derive(Debug)]
-struct Cell {
-    state: State,
-}
-#[derive(Debug, PartialEq)]
-enum State {
-    Full,
-    Blocked,
-    Empty,
-}
-
-impl Cell {
-    fn new() -> Cell {
-        Cell {
-            state: State::Empty,
+    pub fn act_on_cell(&self, play: Play, x: usize, y: usize) {
+        let mut cell = self.rows[y - 1].cell(x - 1).borrow_mut();
+        match play {
+            Play::Mark => cell.mark(),
+            Play::Block => cell.block(),
+            Play::Wipe => cell.wipe(),
         }
     }
 
-    fn mark(&mut self) {
-        self.state = State::Full;
-    }
-
-    fn block(&mut self) {
-        self.state = State::Blocked;
-    }
-
-    fn wipe(&mut self) {
-        self.state = State::Empty;
+    pub fn check(&self) -> bool {
+        self.rows.iter().fold(true, |acc, row| acc && row.check())
+            && self
+                .columns
+                .iter()
+                .fold(true, |acc, col| acc && col.check())
     }
 }
 
-impl Display for Cell {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let repr = match self.state {
-            State::Full => "■",
-            State::Blocked => "⊠",
-            State::Empty => "□",
-        };
-        write!(f, "{repr}")
-    }
+pub enum Play {
+    Mark,
+    Block,
+    Wipe,
 }
 
-#[derive(Debug)]
-struct Hint {
-    numbers: Vec<usize>,
-}
-
-impl Hint {
-    fn new(numbers: Vec<usize>) -> Hint {
-        Hint { numbers }
-    }
-}
-
-impl Display for Hint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut nums = String::new();
-        for n in &self.numbers {
-            nums.push_str(&format!("{n} "));
+impl Play {
+    pub fn build(play: &str) -> Option<Play> {
+        match play {
+            "m" | "M" => Some(Play::Mark),
+            "b" | "B" => Some(Play::Block),
+            "w" | "W" => Some(Play::Wipe),
+            _ => None,
         }
-        write!(f, "{}", &nums)
     }
 }
