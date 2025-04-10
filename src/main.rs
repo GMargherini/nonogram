@@ -1,12 +1,15 @@
 mod puzzle;
-use std::{io, process::exit};
+use std::{io::{self}, process::exit};
 
 use puzzle::Puzzle;
 
 fn main() {
     let puzzle = match Puzzle::import("puzzle.yaml") {
         Ok(p) => p,
-        Err(_) => exit(1),
+        Err(e) => {
+            println!("{e}");
+            exit(1)
+        }
     };
     loop {
         if puzzle.check() {
@@ -25,6 +28,7 @@ fn main() {
         let play: Vec<&str> = play.trim().split(" ").collect();
         if play.len() != 3 {
             println!("Wrong command");
+            discard_input();
             continue;
         }
 
@@ -33,6 +37,7 @@ fn main() {
             (Ok(a), Ok(b)) => (a, b),
             _ => {
                 println!("Wrong command");
+                discard_input();
                 continue;
             }
         };
@@ -41,8 +46,16 @@ fn main() {
             Some(p) => puzzle.act_on_cell(p, x, y),
             None => {
                 println!("Wrong command");
+                discard_input();
                 continue;
             }
         }
     }
+}
+
+fn discard_input() {
+    let mut s = String::new();
+    io::stdin()
+        .read_line(&mut s)
+        .expect("Failed to read line");
 }
