@@ -1,10 +1,13 @@
 mod puzzle;
-use std::{io::{self}, process::exit};
+use std::{
+    io::{self},
+    process::exit,
+};
 
 use puzzle::Puzzle;
 
 fn main() {
-    let puzzle = match Puzzle::import("puzzle.yaml") {
+    let puzzle = match Puzzle::build("puzzle.yaml") {
         Ok(p) => p,
         Err(e) => {
             println!("{e}");
@@ -55,7 +58,5 @@ fn main() {
 
 fn discard_input() {
     let mut s = String::new();
-    io::stdin()
-        .read_line(&mut s)
-        .expect("Failed to read line");
+    io::stdin().read_line(&mut s).expect("Failed to read line");
 }

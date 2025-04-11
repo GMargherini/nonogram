@@ -1,3 +1,4 @@
+use super::parser::CellRef;
 use std::{cell::RefCell, fmt::Display, rc::Rc};
 
 #[derive(Debug)]
@@ -14,7 +15,7 @@ pub enum Direction {
 }
 
 impl Line {
-    pub fn new(cells: Vec<Rc<RefCell<Cell>>>, hint: Vec<usize>, direction: Direction) -> Line {
+    pub fn new(cells: Vec<CellRef>, hint: Vec<usize>, direction: Direction) -> Line {
         let hint = Hint::new(hint);
         Line {
             cells,
